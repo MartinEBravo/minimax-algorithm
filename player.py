@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-import random
+
 from fishing_game_core.game_tree import Node
 from fishing_game_core.player_utils import PlayerController
 from fishing_game_core.shared import ACTION_TO_STR
-
+import time
 
 class PlayerControllerHuman(PlayerController):
     def player_loop(self):
@@ -19,186 +19,169 @@ class PlayerControllerHuman(PlayerController):
             if msg["game_over"]:
                 return
 
-
 class PlayerControllerMinimax(PlayerController):
     def __init__(self):
         super(PlayerControllerMinimax, self).__init__()
+        self.start_time = None
+        self.timeout_duration = 0.06 # Lower than 0.075
+        self.states_stored = {}
 
     def player_loop(self):
         """
         Main loop for the minimax next move search.
         """
-        # Generate the first message (do not remove this line)
         first_msg = self.receiver()
 
         while True:
             msg = self.receiver()
+            if msg["game_over"]:		
+                return
 
             # Create the root node of the game tree
             node = Node(message=msg, player=0)
 
-            # Use minimax with alpha-beta pruning to find the best move
-            best_move = self.search_best_next_move(initial_tree_node=node)
+            # Initialize variables
+            self.start_time = time.time()
+            self.states_stored = {}
+
+            # Use minimax with iterative deepening to find the best move
+            best_move = self.search_best_next_move(node)
 
             # Send the best move to the game
             self.sender({"action": best_move, "search_time": None})
 
     def search_best_next_move(self, initial_tree_node):
         """
-        Search for the best next move using Iterative Deepening Search (IDS) and the Minimax algorithm with alpha-beta pruning.
-        Args:
-            initial_tree_node (TreeNode): The initial node of the game tree from which to start the search.
-        Returns:
-            str: The best move as a string representation.
+        Use your minimax model to find the best possible next move for player 0 (green boat).
         """
-
-        # Best move and score
-        best_move = -1
         best_score = float("-inf")
+        best_move = 0
 
-        # Iterative Deepening Search (IDS)
-        for depth in range(1, 20):
+        # Compute children for move ordering
+        children = initial_tree_node.compute_and_get_children()
+        children.sort(key=lambda child: self.heuristic(child), reverse=True)
 
-            # Obtain the score of the node
-            score = self.minimax_alpha_beta_search(initial_tree_node, depth)
+        for max_depth in range(1, 20):
+            for child in children:
+                score = self.minimax(
+                    child, alpha=float("-inf"), beta=float("inf"),
+                    player=False, max_depth=max_depth
+                )
+                if score > best_score:
+                    best_move = child.move
+                    best_score = score
 
-            # Get the best move
-            if score > best_score:
-                best_score = score
-                best_move = initial_tree_node.move
+                # Check timeout
+                if time.time() - self.start_time > self.timeout_duration:
+                    return ACTION_TO_STR[best_move]
 
         return ACTION_TO_STR[best_move]
 
-    def minimax_alpha_beta_search(self, node, depth):
+    def minimax(self, current_node, alpha, beta, player, max_depth):
         """
         Perform the minimax search with alpha-beta pruning.
-        Args:
-            node: The current state of the game.
-            depth: The maximum depth to search in the game tree.
-        Returns:
-            The best score for the current player.
         """
-        
-        # Alpha and Beta for pruning
-        alpha = float("-inf")
-        beta = float("inf")
+        current_node.compute_and_get_children()
 
-        # Best move and score
-        value = self.max_value(node, depth, alpha, beta)
+        # Hash the state for the states table
+        state_key = self.state_to_string(current_node)
 
-        return value
-        
-    def max_value(self, node, depth, alpha, beta):
+        # If the state is already stored
+        if state_key in self.states_stored:
+
+            # We retrive the stored value
+            cached = self.states_stored[state_key]
+            cached_value, cached_alpha, cached_beta = cached[0], cached[1], cached[2]
+
+            # We know that the value is bounded by alpha
+            if cached_value == cached_alpha:
+                alpha = cached_alpha
+
+            # We know that the value is bounded by beta
+            if cached_value == cached_beta:
+                beta = cached_beta
+
+            # We know that the value is bounded by alpha and beta
+            if cached_value > cached_alpha and cached_value < cached_beta:
+                return cached_value
+
+        # Check terminal conditions
+        if (
+            current_node.depth == max_depth
+            or not current_node.children
+            or time.time() - self.start_time > self.timeout_duration
+        ):
+            return self.heuristic(current_node)
+
+        # Sort children for move ordering, if it is a max player we sort in descending order
+        children = current_node.children
+        children.sort(key=lambda child: self.heuristic(child), reverse=player)
+
+        # Perform the minimax search with alpha-beta pruning
+        if player:
+            value = float("-inf")
+            for child in children:
+                value = max(value, self.minimax(child, alpha, beta, not player, max_depth))
+                alpha = max(alpha, value)
+                if beta <= alpha:
+                    break
+            self.states_stored[state_key] = [value, alpha, beta]
+            return value
+        else:
+            value = float("inf")
+            for child in children:
+                value = min(value, self.minimax(child, alpha, beta, not player, max_depth))
+                beta = min(beta, value)
+                if beta <= alpha:
+                    break
+            self.states_stored[state_key] = [value, alpha, beta]
+            return value
+
+    def heuristic(self, node):
         """
-        Computes the maximum value for the given node using the minimax algorithm with alpha-beta pruning.
-        Args:
-            node (Node): The current node in the game tree.
-            depth (int): The current depth in the game tree.
-            alpha (float): The alpha value for alpha-beta pruning.
-            beta (float): The beta value for alpha-beta pruning.
-        Returns:
-            float: The maximum value computed for the given node.
+        Calculate the heuristic value of a given node.
         """
-
-        # Terminal state
-        if depth == 0 or len(node.state.get_fish_positions()) == 0:
-            return self.heuristic(node)
-        
-        # value <- -∞
-        value = float("-inf")
-
-        # Move Ordering 
-        children = node.compute_and_get_children()
-        children.sort(key=lambda child: self.heuristic(child), reverse=True)
-
-        for child in children:
-            # Recursively call min_value to evaluate the child node
-            value = max(value, self.min_value(child, depth - 1, alpha, beta))
-            # If the value is greater than or equal to beta, prune the remaining branches
-            if value >= beta:
-                return value
-            # Update alpha with the maximum value
-            alpha = max(alpha, value)
-
-        return value
-
-    def min_value(self, node, depth, alpha, beta):
-        """
-        Computes the minimum value for the given node using the minimax algorithm with alpha-beta pruning.
-        Args:
-            node (Node): The current node in the game tree.
-            depth (int): The current depth in the game tree.
-            alpha (float): The alpha value for alpha-beta pruning.
-            beta (float): The beta value for alpha-beta pruning.
-        Returns:
-            float: The minimum value computed for the given node.
-        """
-
-        # Terminal state
-        if depth == 0 or len(node.state.get_fish_positions()) == 0:
-            return self.heuristic(node)
-        
-        # value <- +∞
-        value = float("inf")
-
-        # Move Ordering 
-        children = node.compute_and_get_children()
-        children.sort(key=lambda child: self.heuristic(child))
-
-        for child in children:
-            # Recursively call max_value to evaluate the child node
-            value = min(value, self.max_value(child, depth - 1, alpha, beta))
-            # If the value is less than or equal to alpha, prune the remaining branches
-            if value <= alpha:
-                return value
-            # Update beta with the minimum value
-            beta = min(beta, value)
-
-        return value
-
-    def heuristic(self, currentNode):
-        state = currentNode.state
-        score_player, score_opp = state.get_player_scores()
-
-        difference = score_player - score_opp
-
+        state = node.state
+        p0, p1 = state.get_player_scores()
         hook_positions = state.get_hook_positions()
-        hook_player = hook_positions[0]
-        hook_opp = hook_positions[1]
-
         fish_positions = state.get_fish_positions()
-        fish_values = state.get_fish_scores()
 
-        for fish_number, fish_pos in fish_positions.items():
-            distance_player = self.calculate_distance(hook_player, fish_pos)#distance from player's hook to fish
-            distance_opp = self.calculate_distance(hook_opp, fish_pos)#distance from opponent's hook to fish
+        score_diff = p0 - p1
+        fish_value = 0
 
-            fish_value = fish_values[fish_number]
+        if fish_positions:
+            for fish, pos in fish_positions.items():
+                fish_score = state.fish_scores[fish]
+                my_distance = self.manhattan_distance(hook_positions[0], pos)
+                opp_distance = self.manhattan_distance(hook_positions[1], pos)
 
-            if distance_player == 0: #fish caught by player
-                difference += fish_value
-            elif distance_opp == 0: #fish caught by opponent
-                difference -= fish_value
-            else:
-                if fish_value > 0:
-                    difference += (fish_value /distance_player) + 3
-                    difference -= fish_value / distance_opp
-                else:
-                    difference -= abs(fish_value)/ distance_player
-                    difference += abs(fish_value)/ distance_opp
-            
-            if distance_player == distance_opp:
-                difference -= abs(fish_value) /distance_player
+                # Calculate fish value
+                fish_value += fish_score / (my_distance + 1) - fish_score / (2 * opp_distance + 1)
 
-        caught_fish = state.get_caught()
-        #adding the values of the fish caught to the difference in score
-        if caught_fish[0] is not None:
-            difference += fish_values[caught_fish[0]] 
-        if caught_fish[1] is not None:
-            difference -= fish_values[caught_fish[1]]
+        return score_diff + fish_value
 
-        return difference #finally, the the score difference is returned, taking into consideration the heuristic value
+    def manhattan_distance(self, pos1, pos2, width = 20):
+        """
+        Calculate the Manhattan distance between two positions.
+        """
+        # Handle the case where the distance wraps around the board (x-axis)
+        x_dist = abs(pos1[0] - pos2[0])
+        x_dist = min(x_dist, width - x_dist)
+        y_dist = abs(pos1[1] - pos2[1])
+        return x_dist + y_dist
 
-    #auxiliary method to calculate distance between two positions
-    def calculate_distance(self, pos1, pos2):
-        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+    def state_to_string(self, node):
+        """
+        Create a string representation of the game state for hashing.
+        """
+        state = node.state
+        key = (
+            f"{state.player}{state.player_scores[0]}{state.player_scores[1]}"
+            f"{state.hook_positions[0][0]}{state.hook_positions[0][1]}"
+            f"{state.hook_positions[1][0]}{state.hook_positions[1][1]}"
+        )
+        for fish in state.fish_positions:
+            key += f"{state.fish_positions[fish][0]}{state.fish_positions[fish][1]}"
+        for score in state.fish_scores.values():
+            key += str(score)
+        return key
