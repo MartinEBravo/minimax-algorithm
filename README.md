@@ -4,14 +4,8 @@ A1 - Minimax
 ===
 
 # Objective
-The objective of this assignment is to implement the Minimax search algorithm for the best next
- possible move in the KTH Fishing Derby game tree.
-
-The solution should be efficient, with a time limit per cycle of 75e-3 seconds.
-
-# Instructions
-Program a solution in the file player.py in the provided space for doing so. It is possible to submit the solution in
-different files if player.py imports correctly and without errors each of them.
+The objective of this repository is to implement the Minimax search algorithm for the best next
+ possible move in the Fishing Derby game tree.
 
 # Anaconda Installation and run
 
@@ -193,4 +187,3 @@ interface. You can start with:
 To play yourself using the keyboard (left, right, up, down), change the variable "player_type" in "settings.yml" to the value "human".
 
 Note that can change the scenario of the game! In order to do so change "observations_file" in settings.yml.
-# minimax-algorithm
